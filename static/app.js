@@ -4,6 +4,7 @@ class WebTerminal {
         this.websocket = null;
         this.fitAddon = null;
         this.currentLine = '';
+        this.connected = false;
         
         this.init();
     }
@@ -13,6 +14,8 @@ class WebTerminal {
         this.setupTerminal();
         this.connectWebSocket();
         this.setupEventListeners();
+        this.setupThemeController();
+        this.updateConnectionStatus();
     }
 
     setupTerminal() {
@@ -75,6 +78,8 @@ class WebTerminal {
         this.websocket.onopen = () => {
             this.terminal.clear();
             this.terminal.writeln('Connected to terminal server');
+            this.connected = true;
+            this.updateConnectionStatus();
             console.log('WebSocket connected');
         };
         
@@ -85,11 +90,11 @@ class WebTerminal {
         };
         
         this.websocket.onclose = () => {
-            this.terminal.writeln('\r\n\nConnection closed. Attempting to reconnect...');
+            this.terminal.writeln('\r\n\nConnection closed.');
+            this.connected = false;
+            this.updateConnectionStatus();
             console.log('WebSocket closed');
-            setTimeout(() => {
-                this.connectWebSocket();
-            }, 3000);
+            this.showReconnectDialog();
         };
         
         this.websocket.onerror = (error) => {
@@ -104,10 +109,15 @@ class WebTerminal {
             const shellInfo = await response.json();
             this.shellInfo = shellInfo;
             
-            // 更新页面标题
+            // 更新页面标题和 shell 信息
             const titleElement = document.querySelector('.header-title');
             if (titleElement) {
                 titleElement.textContent = `Web Terminal - ${shellInfo.shell}`;
+            }
+            
+            const shellInfoElement = document.querySelector('.shell-info');
+            if (shellInfoElement) {
+                shellInfoElement.textContent = `Shell: ${shellInfo.shell} ${shellInfo.args.join(' ')}`;
             }
             
             console.log('Shell info loaded:', shellInfo);
@@ -139,13 +149,18 @@ class WebTerminal {
         });
 
         document.querySelector('.control-button.minimize').addEventListener('click', () => {
-            document.body.style.transform = 'scale(0.8)';
-            document.body.style.transformOrigin = 'top left';
+            const container = document.querySelector('.container');
+            container.style.transform = 'scale(0.9)';
+            container.style.transition = 'transform 0.2s ease';
+            setTimeout(() => {
+                container.style.transform = 'scale(1)';
+            }, 200);
         });
 
         document.querySelector('.control-button.maximize').addEventListener('click', () => {
-            document.body.style.transform = 'scale(1)';
-            document.body.style.transformOrigin = 'top left';
+            document.documentElement.requestFullscreen().catch(err => {
+                console.log('Fullscreen not supported:', err);
+            });
         });
 
         document.addEventListener('keydown', (e) => {
@@ -166,6 +181,97 @@ class WebTerminal {
         if (this.terminal) {
             this.terminal.focus();
         }
+    }
+    
+    updateConnectionStatus() {
+        const badge = document.querySelector('.badge');
+        
+        if (this.connected) {
+            badge?.classList.remove('badge-error');
+            badge?.classList.add('badge-success');
+            if (badge) badge.innerHTML = '<div class="w-2 h-2 rounded-full bg-success animate-pulse"></div>Connected';
+        } else {
+            badge?.classList.remove('badge-success');
+            badge?.classList.add('badge-error');
+            if (badge) badge.innerHTML = '<div class="w-2 h-2 rounded-full bg-error"></div>Disconnected';
+        }
+    }
+    
+    setupThemeController() {
+        const themeControllers = document.querySelectorAll('.theme-controller');
+        
+        themeControllers.forEach(controller => {
+            controller.addEventListener('click', (e) => {
+                e.preventDefault();
+                const theme = controller.getAttribute('data-theme');
+                document.documentElement.setAttribute('data-theme', theme);
+                
+                // Update terminal theme based on DaisyUI theme
+                this.updateTerminalTheme(theme);
+                
+                // Store theme preference
+                localStorage.setItem('terminal-theme', theme);
+            });
+        });
+        
+        // Load saved theme
+        const savedTheme = localStorage.getItem('terminal-theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        this.updateTerminalTheme(savedTheme);
+    }
+    
+    updateTerminalTheme(theme) {
+        if (!this.terminal) return;
+        
+        const themes = {
+            'dark': {
+                background: '#1f2937',
+                foreground: '#f9fafb',
+                cursor: '#3b82f6'
+            },
+            'light': {
+                background: '#ffffff',
+                foreground: '#111827',
+                cursor: '#3b82f6'
+            },
+            'cyberpunk': {
+                background: '#0a0a0a',
+                foreground: '#00ff00',
+                cursor: '#ff00ff'
+            },
+            'synthwave': {
+                background: '#1a1a2e',
+                foreground: '#ff6b9d',
+                cursor: '#00d2ff'
+            }
+        };
+        
+        const selectedTheme = themes[theme] || themes.dark;
+        
+        this.terminal.options.theme = {
+            ...this.terminal.options.theme,
+            background: selectedTheme.background,
+            foreground: selectedTheme.foreground,
+            cursor: selectedTheme.cursor
+        };
+    }
+    
+    showReconnectDialog() {
+        const modal = document.getElementById('reconnect_modal');
+        const reconnectBtn = document.getElementById('reconnect-btn');
+        
+        // Remove existing event listeners to prevent duplicates
+        const newReconnectBtn = reconnectBtn.cloneNode(true);
+        reconnectBtn.parentNode.replaceChild(newReconnectBtn, reconnectBtn);
+        
+        // Add new event listener
+        newReconnectBtn.addEventListener('click', () => {
+            modal.close();
+            this.terminal.writeln('Attempting to reconnect...');
+            this.connectWebSocket();
+        });
+        
+        modal.showModal();
     }
 }
 
