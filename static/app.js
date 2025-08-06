@@ -5,7 +5,7 @@ class WebTerminal {
         this.fitAddon = null;
         this.currentLine = '';
         this.connected = false;
-        
+
         this.init();
     }
 
@@ -51,10 +51,10 @@ class WebTerminal {
 
         this.fitAddon = new FitAddon.FitAddon();
         this.terminal.loadAddon(this.fitAddon);
-        
+
         const terminalElement = document.getElementById('terminal');
         this.terminal.open(terminalElement);
-        
+
         setTimeout(() => {
             this.fitAddon.fit();
         }, 100);
@@ -72,9 +72,9 @@ class WebTerminal {
     connectWebSocket() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws`;
-        
+
         this.websocket = new WebSocket(wsUrl);
-        
+
         this.websocket.onopen = () => {
             this.terminal.clear();
             this.terminal.writeln('Connected to terminal server');
@@ -82,13 +82,13 @@ class WebTerminal {
             this.updateConnectionStatus();
             console.log('WebSocket connected');
         };
-        
+
         this.websocket.onmessage = (event) => {
             // 确保正确处理换行符
             let data = event.data.replace(/\n/g, '\r\n');
             this.terminal.write(data);
         };
-        
+
         this.websocket.onclose = () => {
             this.terminal.writeln('\r\n\nConnection closed.');
             this.connected = false;
@@ -96,7 +96,7 @@ class WebTerminal {
             console.log('WebSocket closed');
             this.showReconnectDialog();
         };
-        
+
         this.websocket.onerror = (error) => {
             this.terminal.writeln('\r\n\nConnection error occurred');
             console.error('WebSocket error:', error);
@@ -108,18 +108,18 @@ class WebTerminal {
             const response = await fetch('/api/shell-info');
             const shellInfo = await response.json();
             this.shellInfo = shellInfo;
-            
+
             // 更新页面标题和 shell 信息
             const titleElement = document.querySelector('.header-title');
             if (titleElement) {
                 titleElement.textContent = `Web Terminal - ${shellInfo.shell}`;
             }
-            
+
             const shellInfoElement = document.querySelector('.shell-info');
             if (shellInfoElement) {
                 shellInfoElement.textContent = `Shell: ${shellInfo.shell} ${shellInfo.args.join(' ')}`;
             }
-            
+
             console.log('Shell info loaded:', shellInfo);
         } catch (error) {
             console.error('Failed to fetch shell info:', error);
@@ -182,10 +182,10 @@ class WebTerminal {
             this.terminal.focus();
         }
     }
-    
+
     updateConnectionStatus() {
         const badge = document.querySelector('.badge');
-        
+
         if (this.connected) {
             badge?.classList.remove('badge-error');
             badge?.classList.add('badge-success');
@@ -196,33 +196,33 @@ class WebTerminal {
             if (badge) badge.innerHTML = '<div class="w-2 h-2 rounded-full bg-error"></div>Disconnected';
         }
     }
-    
+
     setupThemeController() {
         const themeControllers = document.querySelectorAll('.theme-controller');
-        
+
         themeControllers.forEach(controller => {
             controller.addEventListener('click', (e) => {
                 e.preventDefault();
                 const theme = controller.getAttribute('data-theme');
                 document.documentElement.setAttribute('data-theme', theme);
-                
+
                 // Update terminal theme based on DaisyUI theme
                 this.updateTerminalTheme(theme);
-                
+
                 // Store theme preference
                 localStorage.setItem('terminal-theme', theme);
             });
         });
-        
+
         // Load saved theme
         const savedTheme = localStorage.getItem('terminal-theme') || 'dark';
         document.documentElement.setAttribute('data-theme', savedTheme);
         this.updateTerminalTheme(savedTheme);
     }
-    
+
     updateTerminalTheme(theme) {
         if (!this.terminal) return;
-        
+
         const themes = {
             'dark': {
                 background: '#1f2937',
@@ -245,9 +245,9 @@ class WebTerminal {
                 cursor: '#00d2ff'
             }
         };
-        
+
         const selectedTheme = themes[theme] || themes.dark;
-        
+
         this.terminal.options.theme = {
             ...this.terminal.options.theme,
             background: selectedTheme.background,
@@ -255,29 +255,172 @@ class WebTerminal {
             cursor: selectedTheme.cursor
         };
     }
-    
+
     showReconnectDialog() {
         const modal = document.getElementById('reconnect_modal');
         const reconnectBtn = document.getElementById('reconnect-btn');
-        
+
         // Remove existing event listeners to prevent duplicates
         const newReconnectBtn = reconnectBtn.cloneNode(true);
         reconnectBtn.parentNode.replaceChild(newReconnectBtn, reconnectBtn);
-        
+
         // Add new event listener
         newReconnectBtn.addEventListener('click', () => {
             modal.close();
             this.terminal.writeln('Attempting to reconnect...');
             this.connectWebSocket();
         });
-        
+
         modal.showModal();
+    }
+
+    // 调试方法 - 获取终端缓冲区内容
+    getBuffer() {
+        if (!this.terminal) return null;
+        const buffer = this.terminal.buffer.active;
+        const lines = [];
+        for (let i = 0; i < buffer.length; i++) {
+            const line = buffer.getLine(i);
+            if (line) {
+                lines.push(line.translateToString(true));
+            }
+        }
+        return lines;
+    }
+
+    // 调试方法 - 获取当前行内容
+    getCurrentLine() {
+        if (!this.terminal) return null;
+        const buffer = this.terminal.buffer.active;
+        const currentLine = buffer.getLine(buffer.cursorY);
+        return currentLine ? currentLine.translateToString(true) : null;
+    }
+
+    // 调试方法 - 获取指定行内容
+    getLine(lineNumber) {
+        if (!this.terminal) return null;
+        const buffer = this.terminal.buffer.active;
+        const line = buffer.getLine(lineNumber);
+        return line ? line.translateToString(true) : null;
+    }
+
+    // 调试方法 - 获取光标位置
+    getCursorPosition() {
+        if (!this.terminal) return null;
+        const buffer = this.terminal.buffer.active;
+        return {
+            x: buffer.cursorX,
+            y: buffer.cursorY,
+            line: this.getCurrentLine()
+        };
+    }
+
+    // 调试方法 - 获取终端统计信息
+    getTerminalInfo() {
+        if (!this.terminal) return null;
+        const buffer = this.terminal.buffer.active;
+        return {
+            cols: this.terminal.cols,
+            rows: this.terminal.rows,
+            bufferLength: buffer.length,
+            cursorX: buffer.cursorX,
+            cursorY: buffer.cursorY,
+            connected: this.connected,
+            shellInfo: this.shellInfo
+        };
+    }
+
+    // 调试方法 - 获取可视区域的所有内容
+    getVisibleContent() {
+        if (!this.terminal) return null;
+        const buffer = this.terminal.buffer.active;
+        const lines = [];
+        const viewportStart = buffer.viewportY;
+        const viewportEnd = Math.min(viewportStart + this.terminal.rows, buffer.length);
+
+        for (let i = viewportStart; i < viewportEnd; i++) {
+            const line = buffer.getLine(i);
+            lines.push({
+                index: i,
+                content: line ? line.translateToString(true) : '',
+                isCursorLine: i === buffer.cursorY
+            });
+        }
+        return lines;
+    }
+
+    getRecentLines(count = 10) {
+        if (!this.terminal) return null;
+        const buffer = this.terminal.buffer.active;
+        const lines = [];
+        const start = Math.max(0, buffer.cursorY - count + 1);
+
+        for (let i = start; i <= buffer.cursorY; i++) {
+            const line = buffer.getLine(i);
+            lines.push({
+                index: i,
+                content: line ? line.translateToString(true) : '',
+                isCursorLine: i === buffer.cursorY
+            });
+        }
+        return lines;
+    }
+
+    getNonEmptyLines() {
+        if (!this.terminal) return null;
+        const buffer = this.terminal.buffer.active;
+        const lines = [];
+
+        for (let i = 0; i < buffer.length; i++) {
+            const line = buffer.getLine(i);
+            if (line) {
+                const content = line.translateToString(true).trim();
+                if (content) {
+                    lines.push({
+                        index: i,
+                        content: content,
+                        isCursorLine: i === buffer.cursorY
+                    });
+                }
+            }
+        }
+        return lines;
+    }
+
+    // 调试方法 - 实时监控终端变化
+    startMonitoring(callback) {
+        if (!this.terminal) return null;
+
+        const monitor = () => {
+            const info = {
+                cursorPosition: this.getCursorPosition(),
+                currentLine: this.getCurrentLine(),
+                recentLines: this.getRecentLines(5),
+                timestamp: new Date().toLocaleTimeString()
+            };
+
+            if (callback) {
+                callback(info);
+            } else {
+                console.log('Terminal Monitor:', info);
+            }
+        };
+
+        // 每秒监控一次
+        const intervalId = setInterval(monitor, 1000);
+
+        // 返回停止函数
+        return () => clearInterval(intervalId);
     }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     const webTerminal = new WebTerminal();
-    
+
+    // 将终端实例暴露到全局作用域，方便在 F12 中调试
+    window.webTerminal = webTerminal;
+    window.terminal = webTerminal.terminal; // 直接访问 xterm 实例
+
     setTimeout(() => {
         webTerminal.focus();
     }, 500);
