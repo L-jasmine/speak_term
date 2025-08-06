@@ -5,6 +5,16 @@ class WebTerminal {
         this.fitAddon = null;
         this.currentLine = '';
         this.connected = false;
+        this.whisperUrl = '';
+        this.whisperToken = '';
+        this.whisperLanguage = 'auto';
+        this.DEFAULT_WHISPER_URL = 'https://whisper.gaia.domains/v1/audio/transcriptions';
+
+        // VAD 相关属性
+        this.myvad = null;
+        this.isVadActive = false;
+        this.vadEnabled = false;
+        this.pendingInput = ''; // 待输入的内容
 
         this.init();
     }
@@ -15,7 +25,10 @@ class WebTerminal {
         this.connectWebSocket();
         this.setupEventListeners();
         this.setupThemeController();
+        this.setupSettingsModal();
+        this.loadSettings();
         this.updateConnectionStatus();
+        this.initializeVAD();
     }
 
     setupTerminal() {
@@ -168,6 +181,24 @@ class WebTerminal {
                 e.preventDefault();
                 this.sendKeyboardInterrupt();
             }
+        });
+
+        // VAD Button Event Listener
+        const vadBtn = document.getElementById('vad-btn');
+        vadBtn?.addEventListener('click', () => {
+            this.toggleVAD();
+        });
+
+        // Clear Pending Input Button
+        const clearPendingBtn = document.getElementById('clear-pending');
+        clearPendingBtn?.addEventListener('click', () => {
+            this.clearPendingInput();
+        });
+
+        // Clear Speech Display Button
+        const clearSpeechBtn = document.getElementById('clear-speech');
+        clearSpeechBtn?.addEventListener('click', () => {
+            this.clearSpeechDisplay();
         });
     }
 
@@ -411,6 +442,666 @@ class WebTerminal {
 
         // 返回停止函数
         return () => clearInterval(intervalId);
+    }
+
+    // 设置相关方法
+    setupSettingsModal() {
+        const settingsBtn = document.getElementById('settings-btn');
+        const saveBtn = document.getElementById('save-settings-btn');
+        const testWhisperBtn = document.getElementById('test-whisper-btn');
+        const resetWhisperBtn = document.getElementById('reset-whisper-btn');
+        const toggleTokenBtn = document.getElementById('toggle-token-visibility');
+        const clearTokenBtn = document.getElementById('clear-token-btn');
+
+        // 打开设置模态框
+        settingsBtn?.addEventListener('click', () => {
+            this.openSettingsModal();
+        });
+
+        // 保存设置
+        saveBtn?.addEventListener('click', () => {
+            this.saveSettings();
+        });
+
+        // 测试 Whisper 连接
+        testWhisperBtn?.addEventListener('click', () => {
+            this.testWhisperConnection();
+        });
+
+        // 重置 Whisper URL 到默认值
+        resetWhisperBtn?.addEventListener('click', () => {
+            this.resetWhisperUrl();
+        });
+
+        // 切换 Token 可见性
+        toggleTokenBtn?.addEventListener('click', () => {
+            this.toggleTokenVisibility();
+        });
+
+        // 清除 Token
+        clearTokenBtn?.addEventListener('click', () => {
+            this.clearToken();
+        });
+    }
+
+    openSettingsModal() {
+        const modal = document.getElementById('settings_modal');
+        const whisperUrlInput = document.getElementById('whisper-url-input');
+        const whisperTokenInput = document.getElementById('whisper-token-input');
+        const whisperLanguageSelect = document.getElementById('whisper-language-select');
+
+        // 加载当前设置到输入框
+        if (whisperUrlInput) {
+            whisperUrlInput.value = this.whisperUrl || '';
+        }
+        if (whisperTokenInput) {
+            whisperTokenInput.value = this.whisperToken || '';
+        }
+        if (whisperLanguageSelect) {
+            whisperLanguageSelect.value = this.whisperLanguage || 'auto';
+        }
+
+        modal?.showModal();
+    }
+
+    saveSettings() {
+        const whisperUrlInput = document.getElementById('whisper-url-input');
+        const whisperTokenInput = document.getElementById('whisper-token-input');
+        const whisperLanguageSelect = document.getElementById('whisper-language-select');
+        const modal = document.getElementById('settings_modal');
+
+        if (whisperUrlInput && whisperTokenInput && whisperLanguageSelect) {
+            const newWhisperUrl = whisperUrlInput.value.trim();
+            const newWhisperToken = whisperTokenInput.value.trim();
+            const newWhisperLanguage = whisperLanguageSelect.value;
+
+            // 验证 URL 格式
+            if (newWhisperUrl && !this.isValidUrl(newWhisperUrl)) {
+                this.showToast('Invalid URL format', 'error');
+                return;
+            }
+
+            this.whisperUrl = newWhisperUrl;
+            this.whisperToken = newWhisperToken;
+            this.whisperLanguage = newWhisperLanguage;
+
+            // 保存 URL 到 localStorage，Token 和语言不保存
+            localStorage.setItem('whisper-url', this.whisperUrl);
+
+            this.showToast('Settings saved successfully', 'success');
+            this.updateWhisperStatus();
+            modal?.close();
+        }
+    }
+
+    loadSettings() {
+        // 从 localStorage 加载 URL 设置，Token 和语言不持久化保存
+        this.whisperUrl = localStorage.getItem('whisper-url') || this.DEFAULT_WHISPER_URL;
+        this.whisperLanguage = 'auto'; // 语言每次启动都重置为 auto
+        this.whisperToken = ''; // Token 每次启动都重置为空
+        this.updateWhisperStatus();
+    }
+
+    async testWhisperConnection() {
+        const whisperUrlInput = document.getElementById('whisper-url-input');
+        const testBtn = document.getElementById('test-whisper-btn');
+        const url = whisperUrlInput?.value.trim();
+
+        if (!url) {
+            this.showToast('Please enter a Whisper URL first', 'warning');
+            return;
+        }
+
+        if (!this.isValidUrl(url)) {
+            this.showToast('Invalid URL format', 'error');
+            return;
+        }
+
+        // 更新按钮状态
+        if (testBtn) {
+            testBtn.disabled = true;
+            testBtn.innerHTML = '<span class="loading loading-spinner loading-xs"></span> Testing...';
+        }
+
+        try {
+            // 测试连接到 Whisper 服务器
+            // 对于 Whisper API，我们发送一个 OPTIONS 请求来检查 CORS 和可用性
+            const response = await fetch(url, {
+                method: 'OPTIONS',
+                timeout: 5000,
+                headers: {
+                    'Origin': window.location.origin
+                }
+            });
+
+            if (response.ok || response.status === 405) {
+                // 405 Method Not Allowed 也表示服务器是可达的
+                this.showToast('Whisper server is reachable!', 'success');
+                this.updateWhisperStatus(true);
+            } else {
+                throw new Error(`HTTP ${response.status}`);
+            }
+        } catch (error) {
+            console.error('Whisper connection test failed:', error);
+            this.showToast('Connection failed: ' + error.message, 'error');
+            this.updateWhisperStatus(false);
+        } finally {
+            // 恢复按钮状态
+            if (testBtn) {
+                testBtn.disabled = false;
+                testBtn.innerHTML = 'Test';
+            }
+        }
+    }
+
+    updateWhisperStatus(connected = null) {
+        const statusElement = document.getElementById('whisper-status');
+        if (!statusElement) return;
+
+        let statusHtml;
+        if (connected === true) {
+            statusHtml = '<div class="badge badge-success"><div class="w-2 h-2 rounded-full bg-success mr-2"></div>Connected</div>';
+        } else if (connected === false) {
+            statusHtml = '<div class="badge badge-error"><div class="w-2 h-2 rounded-full bg-error mr-2"></div>Connection Failed</div>';
+        } else if (this.whisperUrl) {
+            statusHtml = '<div class="badge badge-warning"><div class="w-2 h-2 rounded-full bg-warning mr-2"></div>Not Tested</div>';
+        } else {
+            statusHtml = '<div class="badge badge-neutral"><div class="w-2 h-2 rounded-full bg-base-content opacity-60 mr-2"></div>Not Configured</div>';
+        }
+
+        statusElement.innerHTML = statusHtml;
+    }
+
+    isValidUrl(string) {
+        try {
+            new URL(string);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    showToast(message, type = 'info') {
+        // 创建 toast 通知
+        const toast = document.createElement('div');
+        toast.className = `alert alert-${type} fixed top-4 right-4 w-auto max-w-sm z-50 shadow-lg`;
+        toast.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>${message}</span>
+        `;
+
+        document.body.appendChild(toast);
+
+        // 3秒后自动移除
+        setTimeout(() => {
+            toast.remove();
+        }, 3000);
+    }
+
+    resetWhisperUrl() {
+        const whisperUrlInput = document.getElementById('whisper-url-input');
+        if (whisperUrlInput) {
+            whisperUrlInput.value = this.DEFAULT_WHISPER_URL;
+            this.showToast('Reset to default URL', 'info');
+            this.updateWhisperStatus(); // 重置状态为未测试
+        }
+    }
+
+    toggleTokenVisibility() {
+        const tokenInput = document.getElementById('whisper-token-input');
+        const eyeIcon = document.getElementById('eye-icon');
+
+        if (tokenInput && eyeIcon) {
+            const isPassword = tokenInput.type === 'password';
+            tokenInput.type = isPassword ? 'text' : 'password';
+
+            // 更新眼睛图标
+            if (isPassword) {
+                // 显示状态 - 眼睛斜杠图标
+                eyeIcon.innerHTML = `
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21" />
+                `;
+            } else {
+                // 隐藏状态 - 正常眼睛图标
+                eyeIcon.innerHTML = `
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                `;
+            }
+        }
+    }
+
+    clearToken() {
+        const tokenInput = document.getElementById('whisper-token-input');
+        if (tokenInput) {
+            tokenInput.value = '';
+            this.showToast('Token cleared', 'info');
+        }
+    }
+
+    // 获取 Whisper URL（供其他功能使用）
+    getWhisperUrl() {
+        return this.whisperUrl;
+    }
+
+    // 获取 Whisper Token（供其他功能使用）
+    getWhisperToken() {
+        return this.whisperToken;
+    }
+
+    // 获取完整的 Whisper 配置
+    getWhisperConfig() {
+        return {
+            url: this.whisperUrl,
+            token: this.whisperToken,
+            language: this.whisperLanguage
+        };
+    }
+
+    // VAD 相关方法
+    async initializeVAD() {
+        try {
+            console.log('正在初始化 VAD...');
+
+            // 检查是否支持 VAD
+            if (!window.vad) {
+                console.warn('VAD library not loaded');
+                return;
+            }
+
+            this.myvad = await vad.MicVAD.new({
+                onSpeechStart: () => {
+                    this.handleSpeechStart();
+                },
+                onSpeechEnd: (audio) => {
+                    this.handleSpeechEnd(audio);
+                },
+                onVADMisfire: () => {
+                    this.handleVADMisfire();
+                },
+            });
+
+            console.log('✅ VAD 初始化完成');
+            this.vadEnabled = true;
+            this.updateVADButton();
+
+        } catch (error) {
+            console.error('❌ VAD 初始化失败:', error);
+            this.vadEnabled = false;
+            this.updateVADButton();
+        }
+    }
+
+    async toggleVAD() {
+        if (!this.vadEnabled || !this.myvad) {
+            this.showToast('VAD not available', 'error');
+            return;
+        }
+
+        if (this.isVadActive) {
+            this.myvad.pause();
+            this.isVadActive = false;
+            console.log('⏹️ VAD 已停止');
+        } else {
+            try {
+                await this.myvad.start();
+                this.isVadActive = true;
+                console.log('🎧 VAD 开始监听');
+            } catch (error) {
+                console.error('❌ VAD 启动失败:', error);
+                this.showToast('Failed to start VAD: ' + error.message, 'error');
+            }
+        }
+
+        this.updateVADButton();
+        this.updateVADStatus();
+    }
+
+    handleSpeechStart() {
+        console.log('🎤 检测到语音开始');
+        this.updateVADStatus(true);
+    }
+
+    handleSpeechEnd(audio) {
+        console.log(`🔇 语音结束 - 采样点: ${audio.length}`);
+        this.updateVADStatus(false);
+        this.processSpeechAudio(audio);
+    }
+
+    handleVADMisfire() {
+        console.log('⚠️ VAD 误触发');
+    }
+
+    async processSpeechAudio(audioData) {
+        try {
+            // 如果配置了 Whisper URL，进行语音识别
+            if (this.whisperUrl) {
+                await this.transcribeAudio(audioData);
+            } else {
+                this.showToast('Whisper URL not configured', 'warning');
+            }
+        } catch (error) {
+            console.error('处理语音音频失败:', error);
+            this.showToast('Failed to process speech: ' + error.message, 'error');
+        }
+    }
+
+    processVoiceCommand(transcription) {
+        const text = transcription.trim().toLowerCase();
+
+        // 处理确认指令 - 移除标点符号并处理多种变体
+        const cleanText = text.replace(/[.,!?;:"']/g, '').trim().toLowerCase();
+        if (cleanText === 'ok' || cleanText === 'okay' || cleanText === 'yes' || cleanText === '确认') {
+            if (this.pendingInput) {
+                this.sendTextToTerminal(this.pendingInput);
+                this.clearPendingInput();
+            } else {
+                // 如果没有待输入内容，发送一个回车键
+                this.sendEnterKey();
+            }
+            return true;
+        }
+
+        // 处理方向键指令
+        if (cleanText === 'up' || cleanText === 'previous' || cleanText === '向上') {
+            this.sendArrowKey('up');
+            return true;
+        }
+
+        if (cleanText === 'down' || cleanText === 'next' || cleanText === '向下') {
+            this.sendArrowKey('down');
+            return true;
+        }
+
+        if (cleanText === 'left' || cleanText === '向左') {
+            this.sendArrowKey('left');
+            return true;
+        }
+
+        if (cleanText === 'right' || cleanText === '向右') {
+            this.sendArrowKey('right');
+            return true;
+        }
+
+        // 处理中断指令
+        if (cleanText === 'interrupt' || cleanText === '中断') {
+            this.sendKeyboardInterrupt();
+            return true;
+        }
+
+        return false;
+    }
+
+    setPendingInput(content) {
+        this.pendingInput = content;
+        this.updatePendingInputDisplay();
+        console.log('设置待输入内容:', content);
+    }
+
+    clearPendingInput() {
+        this.pendingInput = '';
+        this.updatePendingInputDisplay();
+        console.log('清除待输入内容');
+    }
+
+    updatePendingInputDisplay() {
+        const pendingInputDiv = document.getElementById('pending-input');
+        const pendingTextSpan = document.getElementById('pending-text');
+
+        if (!pendingInputDiv || !pendingTextSpan) return;
+
+        if (this.pendingInput) {
+            pendingTextSpan.textContent = this.pendingInput;
+            pendingInputDiv.classList.remove('hidden');
+        } else {
+            pendingInputDiv.classList.add('hidden');
+        }
+    }
+
+    showSpeechDisplay(text) {
+        const speechDisplayDiv = document.getElementById('speech-display');
+        const speechTextSpan = document.getElementById('speech-text');
+
+        if (!speechDisplayDiv || !speechTextSpan) return;
+
+        speechTextSpan.textContent = text;
+        speechDisplayDiv.classList.remove('hidden');
+        console.log('显示听到的内容:', text);
+
+        // 3秒后自动隐藏
+        setTimeout(() => {
+            this.clearSpeechDisplay();
+        }, 3000);
+    }
+
+    clearSpeechDisplay() {
+        const speechDisplayDiv = document.getElementById('speech-display');
+        if (speechDisplayDiv) {
+            speechDisplayDiv.classList.add('hidden');
+        }
+        console.log('清除语音显示');
+    }
+
+    async transcribeAudio(audioData) {
+        try {
+            // 创建 WAV 文件
+            const wavBlob = this.createWavFile(audioData, 16000);
+
+            // 创建 FormData
+            const formData = new FormData();
+            formData.append('file', wavBlob, 'audio.wav');
+            formData.append('model', 'whisper-1');
+
+            // 添加语言参数（如果不是auto的话）
+            if (this.whisperLanguage && this.whisperLanguage !== 'auto') {
+                formData.append('language', this.whisperLanguage);
+            }
+
+            // 设置请求头
+            const headers = {
+                'Accept': 'application/json'
+            };
+
+            // 如果有 token，添加授权头
+            if (this.whisperToken) {
+                headers['Authorization'] = `Bearer ${this.whisperToken}`;
+            }
+
+            // 发送请求到 Whisper API
+            const response = await fetch(this.whisperUrl, {
+                method: 'POST',
+                headers: headers,
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const result = await response.json();
+            let transcription = result.text || '';
+
+            // 去掉时间戳，如 [00:00:00.000 --> 00:00:00.960]
+            transcription = this.removeTimestamps(transcription);
+
+            if (transcription.trim()) {
+                // 首先尝试处理语音指令
+                if (!this.processVoiceCommand(transcription.trim())) {
+                    // 如果不是指令，放入待输入区
+                    this.setPendingInput(transcription.trim());
+                }
+            }
+
+        } catch (error) {
+            console.error('语音转录失败:', error);
+            this.showToast('Speech transcription failed: ' + error.message, 'error');
+        }
+    }
+
+    removeTimestamps(text) {
+        // 移除时间戳格式: [.*? --> .*?]
+        return text.replace(/\[.*?-->.*?\]/g, '').trim();
+    }
+
+    sendTextToTerminal(text) {
+        // 发送文本到终端
+        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+            this.websocket.send(text);
+            console.log('发送文本到终端:', text);
+        }
+    }
+
+    sendEnterKey() {
+        // 发送回车键到终端 - 多种方式
+        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+            // 方式1: 使用 \r (更接近真实按键)
+            // this.websocket.send('\r');
+
+            // 方式2: 如果需要，也可以用其他方式
+            // this.websocket.send('\n');
+            // this.websocket.send('\r\n');
+            this.websocket.send('\x0D');
+
+            console.log('发送回车键到终端');
+        }
+    }
+
+    sendArrowKey(direction) {
+        // 发送方向键到终端
+        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+            let arrowSequence = '';
+            switch (direction) {
+                case 'up':
+                    arrowSequence = '\x1b[A'; // ESC[A
+                    break;
+                case 'down':
+                    arrowSequence = '\x1b[B'; // ESC[B
+                    break;
+                case 'right':
+                    arrowSequence = '\x1b[C'; // ESC[C
+                    break;
+                case 'left':
+                    arrowSequence = '\x1b[D'; // ESC[D
+                    break;
+            }
+
+            if (arrowSequence) {
+                this.websocket.send(arrowSequence);
+                console.log('发送方向键到终端:', direction);
+            }
+        }
+    }
+
+    createWavFile(pcmData, sampleRate) {
+        const length = pcmData.length;
+        const buffer = new ArrayBuffer(44 + length * 2);
+        const view = new DataView(buffer);
+
+        // WAV 头部
+        const writeString = (offset, string) => {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        };
+
+        writeString(0, 'RIFF');
+        view.setUint32(4, 36 + length * 2, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 1, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        writeString(36, 'data');
+        view.setUint32(40, length * 2, true);
+
+        // 写入 PCM 数据
+        let offset = 44;
+        for (let i = 0; i < length; i++) {
+            const sample = Math.max(-32768, Math.min(32767, pcmData[i] * 32767));
+            view.setInt16(offset, sample, true);
+            offset += 2;
+        }
+
+        return new Blob([buffer], { type: 'audio/wav' });
+    }
+
+    updateVADButton() {
+        const vadBtn = document.getElementById('vad-btn');
+        const vadIcon = document.getElementById('vad-icon');
+
+        if (!vadBtn || !vadIcon) return;
+
+        if (!this.vadEnabled) {
+            vadBtn.classList.add('btn-disabled');
+            vadBtn.title = 'VAD not available';
+        } else if (this.isVadActive) {
+            vadBtn.classList.remove('btn-ghost', 'btn-disabled');
+            vadBtn.classList.add('btn-error');
+            vadBtn.title = 'Stop Voice Activity Detection';
+
+            // 更新图标为停止图标
+            vadIcon.innerHTML = `
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 6h12v12H6z"></path>
+            `;
+        } else {
+            vadBtn.classList.remove('btn-error', 'btn-disabled');
+            vadBtn.classList.add('btn-ghost');
+            vadBtn.title = 'Start Voice Activity Detection';
+
+            // 恢复麦克风图标
+            vadIcon.innerHTML = `
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+            `;
+        }
+    }
+
+    updateVADStatus(isListening = null) {
+        const vadStatus = document.getElementById('vad-status');
+        if (!vadStatus) return;
+
+        if (isListening === true) {
+            // 正在监听语音
+            vadStatus.classList.remove('hidden');
+            vadStatus.innerHTML = `
+                <span class="loading loading-dots loading-sm mr-1"></span>
+                <span>Recording...</span>
+            `;
+        } else if (isListening === false) {
+            // 语音结束
+            vadStatus.classList.remove('hidden');
+            vadStatus.innerHTML = `
+                <span class="mr-1">🔇</span>
+                <span>Processing...</span>
+            `;
+
+            // 2秒后隐藏状态
+            setTimeout(() => {
+                if (this.isVadActive) {
+                    vadStatus.innerHTML = `
+                        <span class="loading loading-dots loading-sm mr-1"></span>
+                        <span>Listening...</span>
+                    `;
+                } else {
+                    vadStatus.classList.add('hidden');
+                }
+            }, 2000);
+        } else if (this.isVadActive) {
+            // VAD 激活但未检测到语音
+            vadStatus.classList.remove('hidden');
+            vadStatus.innerHTML = `
+                <span class="loading loading-dots loading-sm mr-1"></span>
+                <span>Listening...</span>
+            `;
+        } else {
+            // VAD 未激活
+            vadStatus.classList.add('hidden');
+        }
     }
 }
 
